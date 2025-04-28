@@ -6,6 +6,7 @@ from aiohttp import (
 from aiohttp_socks import ProxyConnector
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from eth_utils import to_hex
 from fake_useragent import FakeUserAgent
 from datetime import datetime, timezone
 from colorama import *
@@ -134,11 +135,11 @@ class GPU:
             message = f"token.gpu.net wants you to sign in with your Ethereum account:\n{address}\n\nSign in with Ethereum to the app.\n\nURI: https://token.gpu.net\nVersion: 1\nChain ID: 4048\nNonce: {nonce}\nIssued At: {timestamp}"
             encoded_message = encode_defunct(text=message)
             signed_message = Account.sign_message(encoded_message, private_key=account)
-            signature = signed_message.signature.hex()
+            signature = to_hex(signed_message.signature)
 
             data = {
                 "message":message,
-                "signature":f"0x{signature}",
+                "signature":signature,
                 "referralCode": self.ref_code
             }
 
