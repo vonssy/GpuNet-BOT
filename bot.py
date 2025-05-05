@@ -432,7 +432,7 @@ class GPU:
         self.log(f"{Fore.CYAN + Style.BRIGHT}Task Lists:{Style.RESET_ALL}")
         
         displayed = "Unknown"
-        for category in ["social", "gpunet", "onchain", "dev"]:
+        for category in ["social", "gpunet", "onchain", "dev", "partner", "solana", "twitter", "dapp"]:
             if category == "social":
                 displayed = "Social"
             elif category == "Gpunet":
@@ -441,6 +441,14 @@ class GPU:
                 displayed = "Onchain"
             elif category == "dev":
                 displayed = "Dev"
+            elif category == "partner":
+                displayed = "Partner"
+            elif category == "solana":
+                displayed = "Solana"
+            elif category == "twitter":
+                displayed = "Twitter"
+            elif category == "dapp":
+                displayed = "Dapp"
 
             tasks = await self.task_lists(token, category, proxy)
             if tasks:
@@ -463,7 +471,7 @@ class GPU:
                             )
                             continue
                         
-                        if category in["social", "onchain", "dev"]:
+                        if category in ["social", "onchain", "dev", "partner", "solana", "twitter", "dapp"]:
                             verify = await self.verify_tasks(token, category, task_id, proxy)
                             if verify and verify.get("message") == "Task verified":
                                 self.log(
@@ -498,31 +506,32 @@ class GPU:
                                     f"{Fore.RED + Style.BRIGHT}Not Completed{Style.RESET_ALL}"
                                 )
 
-                claim_multiplier = await self.claim_multiplier(token, category, proxy)
-                if claim_multiplier and claim_multiplier.get("message") == "Multiplexer bonus awarded":
-                    self.log(
-                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                        f"{Fore.WHITE + Style.BRIGHT} {category} Multiplier {Style.RESET_ALL}"
-                        f"{Fore.GREEN + Style.BRIGHT}Is Claimed{Style.RESET_ALL}"
-                    )
-                elif claim_multiplier and claim_multiplier.get("message") == "Not all tasks completed":
-                    self.log(
-                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                        f"{Fore.WHITE + Style.BRIGHT} {category} Multiplier {Style.RESET_ALL}"
-                        f"{Fore.YELLOW + Style.BRIGHT}Not Eligible{Style.RESET_ALL}"
-                    )
-                elif claim_multiplier and claim_multiplier.get("message") == "Multiplexer bonus already awarded for this quest type":
-                    self.log(
-                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                        f"{Fore.WHITE + Style.BRIGHT} {category} Multiplier {Style.RESET_ALL}"
-                        f"{Fore.YELLOW + Style.BRIGHT}Already Claimed{Style.RESET_ALL}"
-                    )
-                else:
-                    self.log(
-                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                        f"{Fore.WHITE + Style.BRIGHT} {category} Multiplier {Style.RESET_ALL}"
-                        f"{Fore.RED + Style.BRIGHT}Not Claimed{Style.RESET_ALL}"
-                    )
+                if category == "social":
+                    claim_multiplier = await self.claim_multiplier(token, category, proxy)
+                    if claim_multiplier and claim_multiplier.get("message") == "Multiplexer bonus awarded":
+                        self.log(
+                            f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                            f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
+                            f"{Fore.GREEN + Style.BRIGHT}Is Claimed{Style.RESET_ALL}"
+                        )
+                    elif claim_multiplier and claim_multiplier.get("message") == "Not all tasks completed":
+                        self.log(
+                            f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                            f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
+                            f"{Fore.YELLOW + Style.BRIGHT}Not Eligible{Style.RESET_ALL}"
+                        )
+                    elif claim_multiplier and claim_multiplier.get("message") == "Multiplexer bonus already awarded for this quest type":
+                        self.log(
+                            f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                            f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
+                            f"{Fore.YELLOW + Style.BRIGHT}Already Claimed{Style.RESET_ALL}"
+                        )
+                    else:
+                        self.log(
+                            f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                            f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
+                            f"{Fore.RED + Style.BRIGHT}Not Claimed{Style.RESET_ALL}"
+                        )
 
             else:
                 self.log(
