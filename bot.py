@@ -243,7 +243,6 @@ class GPU:
             **self.headers,
             "Cookie": token_cookie
         }
-        self.log(headers)
         for attempt in range(retries):
             connector = ProxyConnector.from_url(proxy) if proxy else None
             try:
