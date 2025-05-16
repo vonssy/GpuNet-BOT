@@ -168,10 +168,10 @@ class GPU:
     def print_question(self):
         while True:
             try:
-                print("1. Run With Monosans Proxy")
-                print("2. Run With Private Proxy")
-                print("3. Run Without Proxy")
-                choose = int(input("Choose [1/2/3] -> ").strip())
+                print(f"{Fore.WHITE + Style.BRIGHT}1. Run With Monosans Proxy{Style.RESET_ALL}")
+                print(f"{Fore.WHITE + Style.BRIGHT}2. Run With Private Proxy{Style.RESET_ALL}")
+                print(f"{Fore.WHITE + Style.BRIGHT}3. Run Without Proxy{Style.RESET_ALL}")
+                choose = int(input(f"{Fore.BLUE + Style.BRIGHT}Choose [1/2/3] -> {Style.RESET_ALL}").strip())
 
                 if choose in [1, 2, 3]:
                     proxy_type = (
@@ -180,12 +180,35 @@ class GPU:
                         "Run Without Proxy"
                     )
                     print(f"{Fore.GREEN + Style.BRIGHT}{proxy_type} Selected.{Style.RESET_ALL}")
-                    return choose
+                    break
                 else:
                     print(f"{Fore.RED + Style.BRIGHT}Please enter either 1, 2 or 3.{Style.RESET_ALL}")
             except ValueError:
                 print(f"{Fore.RED + Style.BRIGHT}Invalid input. Enter a number (1, 2 or 3).{Style.RESET_ALL}")
 
+        rotate = False
+        if choose in [1, 2]:
+            while True:
+                rotate = input(f"{Fore.BLUE + Style.BRIGHT}Rotate Invalid Proxy? [y/n] -> {Style.RESET_ALL}").strip()
+
+                if rotate in ["y", "n"]:
+                    rotate = rotate == "y"
+                    break
+                else:
+                    print(f"{Fore.RED + Style.BRIGHT}Invalid input. Enter 'y' or 'n'.{Style.RESET_ALL}")
+
+        return choose, rotate
+    
+    async def check_connection(self, proxy=None):
+        connector = ProxyConnector.from_url(proxy) if proxy else None
+        try:
+            async with ClientSession(connector=connector, timeout=ClientTimeout(total=30)) as session:
+                async with session.get(url="https://token.gpu.net", headers={}) as response:
+                    response.raise_for_status()
+                    return True
+        except (Exception, ClientResponseError) as e:
+            return None
+        
     async def generate_nonce(self, proxy=None, retries=5):
         url = f"{self.BASE_API}/auth/eth/nonce"
         for attempt in range(retries):
@@ -370,221 +393,264 @@ class GPU:
                     await asyncio.sleep(5)
                     continue
                 return None
+
+    async def process_check_connection(self, address: str, use_proxy: bool, rotate_proxy: bool):
+        message = "Checking Connection, Wait..."
+        if use_proxy:
+            message = "Checking Proxy Connection, Wait..."
+
+        print(
+            f"{Fore.CYAN + Style.BRIGHT}[ {datetime.now().astimezone(wib).strftime('%x %X %Z')} ]{Style.RESET_ALL}"
+            f"{Fore.WHITE + Style.BRIGHT} | {Style.RESET_ALL}"
+            f"{Fore.YELLOW + Style.BRIGHT}{message}{Style.RESET_ALL}",
+            end="\r",
+            flush=True
+        )
+
+        proxy = self.get_next_proxy_for_account(address) if use_proxy else None
+
+        if rotate_proxy:
+            is_valid = None
+            while is_valid is None:
+                is_valid = await self.check_connection(proxy)
+                if not is_valid:
+                    self.log(
+                        f"{Fore.CYAN+Style.BRIGHT}Proxy     :{Style.RESET_ALL}"
+                        f"{Fore.WHITE+Style.BRIGHT} {proxy} {Style.RESET_ALL}"
+                        f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                        f"{Fore.RED+Style.BRIGHT} Not 200 OK, {Style.RESET_ALL}"
+                        f"{Fore.YELLOW+Style.BRIGHT}Rotating Proxy...{Style.RESET_ALL}"
+                    )
+                    proxy = self.rotate_proxy_for_account(address) if use_proxy else None
+                    await asyncio.sleep(5)
+                    continue
+
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}Proxy     :{Style.RESET_ALL}"
+                    f"{Fore.WHITE+Style.BRIGHT} {proxy} {Style.RESET_ALL}"
+                    f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                    f"{Fore.GREEN+Style.BRIGHT} 200 OK {Style.RESET_ALL}                  "
+                )
+
+                return True
+
+        is_valid = await self.check_connection(proxy)
+        if not is_valid:
+            self.log(
+                f"{Fore.CYAN+Style.BRIGHT}Proxy     :{Style.RESET_ALL}"
+                f"{Fore.WHITE+Style.BRIGHT} {proxy} {Style.RESET_ALL}"
+                f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                f"{Fore.RED+Style.BRIGHT} Not 200 OK {Style.RESET_ALL}          "
+            )
+            return False
         
+        self.log(
+            f"{Fore.CYAN+Style.BRIGHT}Proxy     :{Style.RESET_ALL}"
+            f"{Fore.WHITE+Style.BRIGHT} {proxy} {Style.RESET_ALL}"
+            f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+            f"{Fore.GREEN+Style.BRIGHT} 200 OK {Style.RESET_ALL}                  "
+        )
+
+        return True
+    
     async def process_generate_nonce(self, address: str, use_proxy: bool):
         proxy = self.get_next_proxy_for_account(address) if use_proxy else None
 
-        nonce = None
-        nonce_cookie = None
+        nonce, nonce_cookie = await self.generate_nonce(proxy)
+        if not nonce or not nonce_cookie:
+            self.log(
+                f"{Fore.CYAN + Style.BRIGHT}Status    :{Style.RESET_ALL}"
+                f"{Fore.RED + Style.BRIGHT} GET Nonce Failed {Style.RESET_ALL}"
+            )
+            return None
 
-        while nonce is None or nonce_cookie is None:
-            nonce, nonce_cookie = await self.generate_nonce(proxy)
-            if not nonce or not nonce_cookie:
-                self.log(
-                    f"{Fore.CYAN + Style.BRIGHT}Status    :{Style.RESET_ALL}"
-                    f"{Fore.RED + Style.BRIGHT} GET Nonce Failed {Style.RESET_ALL}"
-                    f"{Fore.MAGENTA + Style.BRIGHT}-{Style.RESET_ALL}"
-                    f"{Fore.YELLOW + Style.BRIGHT} Retrying... {Style.RESET_ALL}"
-                )
-                proxy = self.rotate_proxy_for_account(address) if use_proxy else None
-                await asyncio.sleep(5)
-                continue
-
-            return nonce, nonce_cookie
+        return nonce, nonce_cookie
         
     async def process_user_verify(self, account: str, address: str, use_proxy: bool):
         nonce, nonce_cookie = await self.process_generate_nonce(address, use_proxy)
         if nonce and nonce_cookie:
             proxy = self.get_next_proxy_for_account(address) if use_proxy else None
 
-            token_cookie = None
+            
+            token_cookie = await self.user_verify(account, address, nonce, nonce_cookie, proxy)
+            if not token_cookie:
+                self.log(
+                    f"{Fore.CYAN + Style.BRIGHT}Status    :{Style.RESET_ALL}"
+                    f"{Fore.RED + Style.BRIGHT} Login Failed {Style.RESET_ALL}"
+                )
+                return None
 
-            while token_cookie is None:
-                token_cookie = await self.user_verify(account, address, nonce, nonce_cookie, proxy)
-                if not token_cookie:
-                    self.log(
-                        f"{Fore.CYAN + Style.BRIGHT}Status    :{Style.RESET_ALL}"
-                        f"{Fore.RED + Style.BRIGHT} Login Failed {Style.RESET_ALL}"
-                        f"{Fore.MAGENTA + Style.BRIGHT}-{Style.RESET_ALL}"
-                        f"{Fore.YELLOW + Style.BRIGHT} Retrying... {Style.RESET_ALL}"
-                    )
-                    proxy = self.rotate_proxy_for_account(address) if use_proxy else None
-                    await asyncio.sleep(5)
-                    continue
+            return token_cookie
+            
+    async def process_accounts(self, account: str, address: str, use_proxy: bool, rotate_proxy: bool):
+        is_valid = await self.process_check_connection(address, use_proxy, rotate_proxy)
+        if is_valid:
+            token_cookie = await self.process_user_verify(account, address, use_proxy)
+            if token_cookie:
+                proxy = self.get_next_proxy_for_account(address) if use_proxy else None
+                self.log(
+                    f"{Fore.CYAN + Style.BRIGHT}Status    :{Style.RESET_ALL}"
+                    f"{Fore.GREEN + Style.BRIGHT} Login Success {Style.RESET_ALL}"
+                )
 
-                return token_cookie
+                balance = "N/A"
 
-    async def process_accounts(self, account: str, address: str, use_proxy: bool):
-        token_cookie = await self.process_user_verify(account, address, use_proxy)
-        if token_cookie:
-            proxy = self.get_next_proxy_for_account(address) if use_proxy else None
-            self.log(
-                f"{Fore.CYAN + Style.BRIGHT}Status    :{Style.RESET_ALL}"
-                f"{Fore.GREEN + Style.BRIGHT} Login Success {Style.RESET_ALL}"
-            )
-            self.log(
-                f"{Fore.CYAN + Style.BRIGHT}Proxy     :{Style.RESET_ALL}"
-                f"{Fore.WHITE + Style.BRIGHT} {proxy} {Style.RESET_ALL}"
-            )
+                points = await self.user_exp(token_cookie, proxy)
+                if points:
+                    balance = points.strip('"')
 
-            balance = "N/A"
-
-            points = await self.user_exp(token_cookie, proxy)
-            if points:
-                balance = points.strip('"')
-
-            self.log(
-                f"{Fore.CYAN + Style.BRIGHT}Balance   :{Style.RESET_ALL}"
-                f"{Fore.WHITE + Style.BRIGHT} {balance} GXP {Style.RESET_ALL}"
-            )
+                self.log(
+                    f"{Fore.CYAN + Style.BRIGHT}Balance   :{Style.RESET_ALL}"
+                    f"{Fore.WHITE + Style.BRIGHT} {balance} GXP {Style.RESET_ALL}"
+                )
 
 
-            streak = await self.streak_info(token_cookie, proxy)
-            if streak:
-                last_perform = streak.get("lastVisitDate")
+                streak = await self.streak_info(token_cookie, proxy)
+                if streak:
+                    last_perform = streak.get("lastVisitDate")
 
-                now = int(datetime.now(timezone.utc).timestamp())
-                next_perform = int(datetime.fromisoformat(last_perform.replace("Z", "+00:00")).timestamp()) + 86400
+                    now = int(datetime.now(timezone.utc).timestamp())
+                    next_perform = int(datetime.fromisoformat(last_perform.replace("Z", "+00:00")).timestamp()) + 86400
 
-                if now >= next_perform:
-                    perform = await self.perform_streak(token_cookie, proxy)
-                    if perform:
-                        self.log(
-                            f"{Fore.CYAN + Style.BRIGHT}Say GM    :{Style.RESET_ALL}"
-                            f"{Fore.GREEN + Style.BRIGHT} Success {Style.RESET_ALL}"
-                        )
+                    if now >= next_perform:
+                        perform = await self.perform_streak(token_cookie, proxy)
+                        if perform:
+                            self.log(
+                                f"{Fore.CYAN + Style.BRIGHT}Say GM    :{Style.RESET_ALL}"
+                                f"{Fore.GREEN + Style.BRIGHT} Success {Style.RESET_ALL}"
+                            )
+                        else:
+                            self.log(
+                                f"{Fore.CYAN + Style.BRIGHT}Say GM    :{Style.RESET_ALL}"
+                                f"{Fore.RED + Style.BRIGHT} Failed {Style.RESET_ALL}"
+                            )
                     else:
                         self.log(
                             f"{Fore.CYAN + Style.BRIGHT}Say GM    :{Style.RESET_ALL}"
-                            f"{Fore.RED + Style.BRIGHT} Failed {Style.RESET_ALL}"
+                            f"{Fore.YELLOW + Style.BRIGHT} Already Performed {Style.RESET_ALL}"
                         )
                 else:
                     self.log(
                         f"{Fore.CYAN + Style.BRIGHT}Say GM    :{Style.RESET_ALL}"
-                        f"{Fore.YELLOW + Style.BRIGHT} Already Performed {Style.RESET_ALL}"
+                        f"{Fore.RED + Style.BRIGHT} GET Data Failed {Style.RESET_ALL}"
                     )
-            else:
-                self.log(
-                    f"{Fore.CYAN + Style.BRIGHT}Say GM    :{Style.RESET_ALL}"
-                    f"{Fore.RED + Style.BRIGHT} GET Data Failed {Style.RESET_ALL}"
-                )
 
-            self.log(f"{Fore.CYAN + Style.BRIGHT}Task Lists:{Style.RESET_ALL}")
-            
-            displayed = "Unknown"
-            for category in ["social", "gpunet", "onchain", "dev", "partner", "solana", "twitter", "dapp"]:
-                if category == "social":
-                    displayed = "Social"
-                elif category == "Gpunet":
-                    displayed = "Intro GPU.net"
-                elif category == "onchain":
-                    displayed = "Onchain"
-                elif category == "dev":
-                    displayed = "Dev"
-                elif category == "partner":
-                    displayed = "Partner"
-                elif category == "solana":
-                    displayed = "Solana"
-                elif category == "twitter":
-                    displayed = "Twitter"
-                elif category == "dapp":
-                    displayed = "Dapp"
+                self.log(f"{Fore.CYAN + Style.BRIGHT}Task Lists:{Style.RESET_ALL}")
+                
+                displayed = "Unknown"
+                for category in ["social", "gpunet", "onchain", "dev", "partner", "solana", "twitter", "dapp"]:
+                    if category == "social":
+                        displayed = "Social"
+                    elif category == "Gpunet":
+                        displayed = "Intro GPU.net"
+                    elif category == "onchain":
+                        displayed = "Onchain"
+                    elif category == "dev":
+                        displayed = "Dev"
+                    elif category == "partner":
+                        displayed = "Partner"
+                    elif category == "solana":
+                        displayed = "Solana"
+                    elif category == "twitter":
+                        displayed = "Twitter"
+                    elif category == "dapp":
+                        displayed = "Dapp"
 
-                tasks = await self.task_lists(token_cookie, category, proxy)
-                if tasks:
-                    self.log(
-                        f"{Fore.MAGENTA + Style.BRIGHT} ● {Style.RESET_ALL}"
-                        f"{Fore.GREEN + Style.BRIGHT}{displayed}{Style.RESET_ALL}"
-                    )
-                    for task in tasks:
-                        if task:
-                            task_id = task["id"]
-                            title = task["name"]
-                            reward = task["experience"]
-                            is_completed = task["completed"]
+                    tasks = await self.task_lists(token_cookie, category, proxy)
+                    if tasks:
+                        self.log(
+                            f"{Fore.MAGENTA + Style.BRIGHT} ● {Style.RESET_ALL}"
+                            f"{Fore.GREEN + Style.BRIGHT}{displayed}{Style.RESET_ALL}"
+                        )
+                        for task in tasks:
+                            if task:
+                                task_id = task["id"]
+                                title = task["name"]
+                                reward = task["experience"]
+                                is_completed = task["completed"]
 
-                            if is_completed:
+                                if is_completed:
+                                    self.log(
+                                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                                        f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
+                                        f"{Fore.YELLOW + Style.BRIGHT}Already Completed{Style.RESET_ALL}"
+                                    )
+                                    continue
+                                
+                                if category in ["social", "onchain", "dev", "partner", "solana", "twitter", "dapp"]:
+                                    verify = await self.verify_tasks(token_cookie, category, task_id, proxy)
+                                    if verify and verify.get("message") == "Task verified":
+                                        self.log(
+                                            f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                                            f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
+                                            f"{Fore.GREEN + Style.BRIGHT}Is Completed{Style.RESET_ALL}"
+                                            f"{Fore.MAGENTA + Style.BRIGHT} - {Style.RESET_ALL}"
+                                            f"{Fore.CYAN + Style.BRIGHT}Reward{Style.RESET_ALL}"
+                                            f"{Fore.WHITE + Style.BRIGHT} {reward} GXP {Style.RESET_ALL}"
+                                        )
+                                    else:
+                                        self.log(
+                                            f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                                            f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
+                                            f"{Fore.RED + Style.BRIGHT}Not Completed{Style.RESET_ALL}"
+                                        )
+                                elif category == "gpunet":
+                                    verify = await self.verify_intro_tasks(token_cookie, task_id, proxy)
+                                    if verify and verify.get("message") == "Task verified":
+                                        self.log(
+                                            f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                                            f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
+                                            f"{Fore.GREEN + Style.BRIGHT}Is Completed{Style.RESET_ALL}"
+                                            f"{Fore.MAGENTA + Style.BRIGHT} - {Style.RESET_ALL}"
+                                            f"{Fore.CYAN + Style.BRIGHT}Reward{Style.RESET_ALL}"
+                                            f"{Fore.WHITE + Style.BRIGHT} {reward} GXP {Style.RESET_ALL}"
+                                        )
+                                    else:
+                                        self.log(
+                                            f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                                            f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
+                                            f"{Fore.RED + Style.BRIGHT}Not Completed{Style.RESET_ALL}"
+                                        )
+
+                        if category == "social":
+                            claim_multiplier = await self.claim_multiplier(token_cookie, category, proxy)
+                            if claim_multiplier and claim_multiplier.get("message") == "Multiplexer bonus awarded":
                                 self.log(
                                     f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                    f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
-                                    f"{Fore.YELLOW + Style.BRIGHT}Already Completed{Style.RESET_ALL}"
+                                    f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
+                                    f"{Fore.GREEN + Style.BRIGHT}Is Claimed{Style.RESET_ALL}"
                                 )
-                                continue
-                            
-                            if category in ["social", "onchain", "dev", "partner", "solana", "twitter", "dapp"]:
-                                verify = await self.verify_tasks(token_cookie, category, task_id, proxy)
-                                if verify and verify.get("message") == "Task verified":
-                                    self.log(
-                                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
-                                        f"{Fore.GREEN + Style.BRIGHT}Is Completed{Style.RESET_ALL}"
-                                        f"{Fore.MAGENTA + Style.BRIGHT} - {Style.RESET_ALL}"
-                                        f"{Fore.CYAN + Style.BRIGHT}Reward{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {reward} GXP {Style.RESET_ALL}"
-                                    )
-                                else:
-                                    self.log(
-                                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
-                                        f"{Fore.RED + Style.BRIGHT}Not Completed{Style.RESET_ALL}"
-                                    )
-                            elif category == "gpunet":
-                                verify = await self.verify_intro_tasks(token_cookie, task_id, proxy)
-                                if verify and verify.get("message") == "Task verified":
-                                    self.log(
-                                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
-                                        f"{Fore.GREEN + Style.BRIGHT}Is Completed{Style.RESET_ALL}"
-                                        f"{Fore.MAGENTA + Style.BRIGHT} - {Style.RESET_ALL}"
-                                        f"{Fore.CYAN + Style.BRIGHT}Reward{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {reward} GXP {Style.RESET_ALL}"
-                                    )
-                                else:
-                                    self.log(
-                                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
-                                        f"{Fore.RED + Style.BRIGHT}Not Completed{Style.RESET_ALL}"
-                                    )
+                            elif claim_multiplier and claim_multiplier.get("message") == "Not all tasks completed":
+                                self.log(
+                                    f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                                    f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
+                                    f"{Fore.YELLOW + Style.BRIGHT}Not Eligible{Style.RESET_ALL}"
+                                )
+                            elif claim_multiplier and claim_multiplier.get("message") == "Multiplexer bonus already awarded for this quest type":
+                                self.log(
+                                    f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                                    f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
+                                    f"{Fore.YELLOW + Style.BRIGHT}Already Claimed{Style.RESET_ALL}"
+                                )
+                            else:
+                                self.log(
+                                    f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
+                                    f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
+                                    f"{Fore.RED + Style.BRIGHT}Not Claimed{Style.RESET_ALL}"
+                                )
 
-                    if category == "social":
-                        claim_multiplier = await self.claim_multiplier(token_cookie, category, proxy)
-                        if claim_multiplier and claim_multiplier.get("message") == "Multiplexer bonus awarded":
-                            self.log(
-                                f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
-                                f"{Fore.GREEN + Style.BRIGHT}Is Claimed{Style.RESET_ALL}"
-                            )
-                        elif claim_multiplier and claim_multiplier.get("message") == "Not all tasks completed":
-                            self.log(
-                                f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
-                                f"{Fore.YELLOW + Style.BRIGHT}Not Eligible{Style.RESET_ALL}"
-                            )
-                        elif claim_multiplier and claim_multiplier.get("message") == "Multiplexer bonus already awarded for this quest type":
-                            self.log(
-                                f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
-                                f"{Fore.YELLOW + Style.BRIGHT}Already Claimed{Style.RESET_ALL}"
-                            )
-                        else:
-                            self.log(
-                                f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
-                                f"{Fore.RED + Style.BRIGHT}Not Claimed{Style.RESET_ALL}"
-                            )
-
-                else:
-                    self.log(
-                        f"{Fore.MAGENTA + Style.BRIGHT} ● {Style.RESET_ALL}"
-                        f"{Fore.RED + Style.BRIGHT}{displayed}{Style.RESET_ALL}"
-                    )
+                    else:
+                        self.log(
+                            f"{Fore.MAGENTA + Style.BRIGHT} ● {Style.RESET_ALL}"
+                            f"{Fore.RED + Style.BRIGHT}{displayed}{Style.RESET_ALL}"
+                        )
 
     async def main(self):
         try:
             with open('accounts.txt', 'r') as file:
                 accounts = [line.strip() for line in file if line.strip()]
 
-            use_proxy_choice = self.print_question()
+            use_proxy_choice, rotate_proxy = self.print_question()
 
             use_proxy = False
             if use_proxy_choice in [1, 2]:
@@ -610,7 +676,7 @@ class GPU:
                             f"{Fore.WHITE + Style.BRIGHT} {self.mask_account(address)} {Style.RESET_ALL}"
                             f"{Fore.CYAN + Style.BRIGHT}]{separator}{Style.RESET_ALL}"
                         )
-                        await self.process_accounts(account, address, use_proxy)
+                        await self.process_accounts(account, address, use_proxy, rotate_proxy)
 
                 self.log(f"{Fore.CYAN + Style.BRIGHT}={Style.RESET_ALL}"*72)
                 

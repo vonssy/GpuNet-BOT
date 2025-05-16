@@ -2,16 +2,17 @@
 GPU.net BOT
 
 - Register Here : [GPU.net](https://token.gpu.net?ref=4LGEHS)
-- Use Code      : 4LGEHS
+- Use Code `4LGEHS`
 - Connect Your X Account
 
 ## Features
 
   - Auto Get Account Information
-  - Auto Run With [Monosans](https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt) Proxy - Choose 1
-  - Auto Run With Private Proxy - Choose 2
-  - Auto Run Without Proxy - Choose 3
-  - Auto Perform Say GM
+  - Auto Run With [Monosans](https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt) Proxy - `Choose 1`
+  - Auto Run With Private Proxy - `Choose 2`
+  - Auto Run Without Proxy - `Choose 3`
+  - Auto Rotate Invalid Proxies - `y` or `n`
+  - Auto Perform Daily Say GM
   - Auto Complete Available Tasks
   - Multi Accounts
 
