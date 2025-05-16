@@ -471,7 +471,6 @@ class GPU:
         if nonce and nonce_cookie:
             proxy = self.get_next_proxy_for_account(address) if use_proxy else None
 
-            
             token_cookie = await self.user_verify(account, address, nonce, nonce_cookie, proxy)
             if not token_cookie:
                 self.log(
