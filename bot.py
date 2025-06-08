@@ -31,6 +31,9 @@ class GPU:
         self.proxies = []
         self.proxy_index = 0
         self.account_proxies = {}
+        self.nonce_str = {}
+        self.nonce_cookies = {}
+        self.token_cookies = {}
 
     def clear_terminal(self):
         os.system('cls' if os.name == 'nt' else 'clear')
@@ -62,18 +65,18 @@ class GPU:
         try:
             if use_proxy_choice == 1:
                 async with ClientSession(timeout=ClientTimeout(total=30)) as session:
-                    async with session.get("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt") as response:
+                    async with session.get("https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text") as response:
                         response.raise_for_status()
                         content = await response.text()
                         with open(filename, 'w') as f:
                             f.write(content)
-                        self.proxies = content.splitlines()
+                        self.proxies = [line.strip() for line in content.splitlines() if line.strip()]
             else:
                 if not os.path.exists(filename):
                     self.log(f"{Fore.RED + Style.BRIGHT}File {filename} Not Found.{Style.RESET_ALL}")
                     return
                 with open(filename, 'r') as f:
-                    self.proxies = f.read().splitlines()
+                    self.proxies = [line.strip() for line in f.read().splitlines() if line.strip()]
             
             if not self.proxies:
                 self.log(f"{Fore.RED + Style.BRIGHT}No Proxies Found.{Style.RESET_ALL}")
@@ -120,23 +123,23 @@ class GPU:
         except Exception as e:
             return None
     
-    def generate_payload(self, account: str, address: str, nonce: int):
+    def generate_payload(self, account: str, address: str):
         try:
             timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-            message = f"token.gpu.net wants you to sign in with your Ethereum account:\n{address}\n\nSign in with Ethereum to the app.\n\nURI: https://token.gpu.net\nVersion: 1\nChain ID: 4048\nNonce: {nonce}\nIssued At: {timestamp}"
+            message = f"token.gpu.net wants you to sign in with your Ethereum account:\n{address}\n\nSign in with Ethereum to the app.\n\nURI: https://token.gpu.net\nVersion: 1\nChain ID: 4048\nNonce: {self.nonce_str[address]}\nIssued At: {timestamp}"
             encoded_message = encode_defunct(text=message)
             signed_message = Account.sign_message(encoded_message, private_key=account)
             signature = to_hex(signed_message.signature)
 
-            data = {
+            payload = {
                 "message":message,
                 "signature":signature,
                 "referralCode": self.ref_code
             }
 
-            return data
+            return payload
         except Exception as e:
-            return None
+            raise Exception(f"Generate Req Payload Failed: {str(e)}")
     
     def extract_cookies(self, raw_cookies: list):
         cookies_dict = {}
@@ -159,27 +162,30 @@ class GPU:
             
             return cookie_header
         except Exception as e:
-            return None
+            raise Exception(f"Extract Cookie Headers Failed: {str(e)}")
     
     def mask_account(self, account):
-        mask_account = account[:6] + '*' * 6 + account[-6:]
-        return mask_account
+        try:
+            mask_account = account[:6] + '*' * 6 + account[-6:]
+            return mask_account
+        except Exception as e:
+            return None
 
     def print_question(self):
         while True:
             try:
-                print(f"{Fore.WHITE + Style.BRIGHT}1. Run With Monosans Proxy{Style.RESET_ALL}")
+                print(f"{Fore.WHITE + Style.BRIGHT}1. Run With Proxyscrape Free Proxy{Style.RESET_ALL}")
                 print(f"{Fore.WHITE + Style.BRIGHT}2. Run With Private Proxy{Style.RESET_ALL}")
                 print(f"{Fore.WHITE + Style.BRIGHT}3. Run Without Proxy{Style.RESET_ALL}")
                 choose = int(input(f"{Fore.BLUE + Style.BRIGHT}Choose [1/2/3] -> {Style.RESET_ALL}").strip())
 
                 if choose in [1, 2, 3]:
                     proxy_type = (
-                        "Run With Monosans Proxy" if choose == 1 else 
-                        "Run With Private Proxy" if choose == 2 else 
-                        "Run Without Proxy"
+                        "With Proxyscrape Free" if choose == 1 else 
+                        "With Private" if choose == 2 else 
+                        "Without"
                     )
-                    print(f"{Fore.GREEN + Style.BRIGHT}{proxy_type} Selected.{Style.RESET_ALL}")
+                    print(f"{Fore.GREEN + Style.BRIGHT}Run {proxy_type} Proxy Selected.{Style.RESET_ALL}")
                     break
                 else:
                     print(f"{Fore.RED + Style.BRIGHT}Please enter either 1, 2 or 3.{Style.RESET_ALL}")
@@ -205,7 +211,7 @@ class GPU:
             connector = ProxyConnector.from_url(proxy) if proxy else None
             try:
                 async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.get(url=url, headers=self.headers) as response:
+                    async with session.get(url=url, headers=self.headers, ssl=False) as response:
                         response.raise_for_status()
                         result = await response.text()
 
@@ -219,22 +225,29 @@ class GPU:
                 if attempt < retries - 1:
                     await asyncio.sleep(5)
                     continue
-                return None, None
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}Status :{Style.RESET_ALL}"
+                    f"{Fore.RED+Style.BRIGHT} Generate Nonce Failed {Style.RESET_ALL}"
+                    f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                    f"{Fore.YELLOW+Style.BRIGHT} {str(e)} {Style.RESET_ALL}"
+                )
 
-    async def user_verify(self, account: str, address: str, nonce: str, nonce_cookie: str, proxy=None, retries=5):
+        return None, None
+
+    async def user_verify(self, account: str, address: str, proxy=None, retries=5):
         url = f"{self.BASE_API}/auth/eth/verify"
-        data = json.dumps(self.generate_payload(account, address, nonce))
+        data = json.dumps(self.generate_payload(account, address))
         headers = {
             **self.headers,
             "Content-Length": str(len(data)),
             "Content-Type": "application/json",
-            "Cookie": nonce_cookie
+            "Cookie": self.nonce_cookies[address]
         }
         for attempt in range(retries):
             connector = ProxyConnector.from_url(proxy) if proxy else None
             try:
                 async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.post(url=url, headers=headers, data=data) as response:
+                    async with session.post(url=url, headers=headers, data=data, ssl=False) as response:
                         response.raise_for_status()
 
                         raw_cookies = response.headers.getall('Set-Cookie', [])
@@ -247,359 +260,173 @@ class GPU:
                 if attempt < retries - 1:
                     await asyncio.sleep(5)
                     continue
-                return None
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}Status :{Style.RESET_ALL}"
+                    f"{Fore.RED+Style.BRIGHT} Login Failed {Style.RESET_ALL}"
+                    f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                    f"{Fore.YELLOW+Style.BRIGHT} {str(e)} {Style.RESET_ALL}"
+                )
             
-    async def user_exp(self, token_cookie: str, proxy=None, retries=5):
+        return None
+            
+    async def user_exp(self, address: str, proxy=None, retries=5):
         url = f"{self.BASE_API}/users/exp"
         headers = {
             **self.headers,
-            "Cookie": token_cookie
+            "Cookie": self.token_cookies[address]
         }
         for attempt in range(retries):
             connector = ProxyConnector.from_url(proxy) if proxy else None
             try:
                 async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.get(url=url, headers=headers) as response:
+                    async with session.get(url=url, headers=headers, ssl=False) as response:
                         response.raise_for_status()
                         return await response.text()
             except (Exception, ClientResponseError) as e:
                 if attempt < retries - 1:
                     await asyncio.sleep(5)
                     continue
-                return None
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}Balance:{Style.RESET_ALL}"
+                    f"{Fore.RED+Style.BRIGHT} GET Earning Failed {Style.RESET_ALL}"
+                    f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                    f"{Fore.YELLOW+Style.BRIGHT} {str(e)} {Style.RESET_ALL}"
+                )
+
+        return None
             
-    async def streak_info(self, token_cookie: str, proxy=None, retries=5):
+    async def streak_info(self, address: str, proxy=None, retries=5):
         url = f"{self.BASE_API}/users/streak"
         headers = {
             **self.headers,
-            "Cookie": token_cookie
+            "Cookie": self.token_cookies[address]
         }
         for attempt in range(retries):
             connector = ProxyConnector.from_url(proxy) if proxy else None
             try:
                 async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.get(url=url, headers=headers) as response:
+                    async with session.get(url=url, headers=headers, ssl=False) as response:
                         response.raise_for_status()
                         return await response.json()
             except (Exception, ClientResponseError) as e:
                 if attempt < retries - 1:
                     await asyncio.sleep(5)
                     continue
-                return None
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}Say GM :{Style.RESET_ALL}"
+                    f"{Fore.RED+Style.BRIGHT} GET Streak Status Failed {Style.RESET_ALL}"
+                    f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                    f"{Fore.YELLOW+Style.BRIGHT} {str(e)} {Style.RESET_ALL}"
+                )
             
-    async def perform_streak(self, token_cookie: str, proxy=None, retries=5):
+        return None
+            
+    async def perform_streak(self, address: str, proxy=None, retries=5):
         url = f"{self.BASE_API}/users/streak"
         headers = {
             **self.headers,
             "Content-Length": "0",
-            "Cookie": token_cookie
+            "Cookie": self.token_cookies[address]
         }
         for attempt in range(retries):
             connector = ProxyConnector.from_url(proxy) if proxy else None
             try:
                 async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.post(url=url, headers=headers) as response:
+                    async with session.post(url=url, headers=headers, ssl=False) as response:
                         response.raise_for_status()
                         return True
             except (Exception, ClientResponseError) as e:
                 if attempt < retries - 1:
                     await asyncio.sleep(5)
                     continue
-                return None
-            
-    async def task_lists(self, token_cookie: str, category: str, proxy=None, retries=5):
-        url = f"{self.BASE_API}/users/{category}/tasks"
-        headers = {
-            **self.headers,
-            "Cookie": token_cookie
-        }
-        for attempt in range(retries):
-            connector = ProxyConnector.from_url(proxy) if proxy else None
-            try:
-                async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.get(url=url, headers=headers) as response:
-                        response.raise_for_status()
-                        return await response.json()
-            except (Exception, ClientResponseError) as e:
-                if attempt < retries - 1:
-                    await asyncio.sleep(5)
-                    continue
-                return None
-            
-    async def verify_tasks(self, token_cookie: str, category: str, task_id: int, proxy=None, retries=5):
-        url = f"{self.BASE_API}/users/{category}/tasks/{str(task_id)}/verify"
-        headers = {
-            **self.headers,
-            "Cookie": token_cookie
-        }
-        for attempt in range(retries):
-            connector = ProxyConnector.from_url(proxy) if proxy else None
-            try:
-                async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.get(url=url, headers=headers) as response:
-                        response.raise_for_status()
-                        return await response.json()
-            except (Exception, ClientResponseError) as e:
-                if attempt < retries - 1:
-                    await asyncio.sleep(5)
-                    continue
-                return None
-            
-    async def verify_intro_tasks(self, token_cookie: str, task_id: int, proxy=None, retries=5):
-        url = f"{self.BASE_API}/users/gpunet/tasks/{str(task_id)}/verify"
-        headers = {
-            **self.headers,
-            "Content-Length": "0",
-            "Cookie": token_cookie
-        }
-        for attempt in range(retries):
-            connector = ProxyConnector.from_url(proxy) if proxy else None
-            try:
-                async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.post(url=url, headers=headers) as response:
-                        response.raise_for_status()
-                        return await response.json()
-            except (Exception, ClientResponseError) as e:
-                if attempt < retries - 1:
-                    await asyncio.sleep(5)
-                    continue
-                return None
-            
-    async def claim_multiplier(self, token_cookie: str, category: str, proxy=None, retries=5):
-        url = f"{self.BASE_API}/users/quests/{category}/multiplexer"
-        headers = {
-            **self.headers,
-            "Cookie": token_cookie
-        }
-        for attempt in range(retries):
-            connector = ProxyConnector.from_url(proxy) if proxy else None
-            try:
-                async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.get(url=url, headers=headers) as response:
-                        response.raise_for_status()
-                        return await response.json()
-            except (Exception, ClientResponseError) as e:
-                if attempt < retries - 1:
-                    await asyncio.sleep(5)
-                    continue
-                return None
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}Say GM :{Style.RESET_ALL}"
+                    f"{Fore.RED+Style.BRIGHT} Failed {Style.RESET_ALL}"
+                    f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                    f"{Fore.YELLOW+Style.BRIGHT} {str(e)} {Style.RESET_ALL}"
+                )
+
+        return None
 
     async def process_generate_nonce(self, address: str, use_proxy: bool, rotate_proxy: bool):
-        print(
-            f"{Fore.CYAN + Style.BRIGHT}[ {datetime.now().astimezone(wib).strftime('%x %X %Z')} ]{Style.RESET_ALL}"
-            f"{Fore.WHITE + Style.BRIGHT} | {Style.RESET_ALL}"
-            f"{Fore.YELLOW + Style.BRIGHT}Try to Login, Wait...{Style.RESET_ALL}",
-            end="\r",
-            flush=True
-        )
-        
-        message = "GET Nonce Failed"
-        if use_proxy:
-            message = "GET Nonce Failed - Rotating Proxy..."
-
-        proxy = self.get_next_proxy_for_account(address) if use_proxy else None
-
-        if rotate_proxy:
-            nonce = None
-            nonce_cookie = None
-            while nonce is None or nonce_cookie is None:
-                nonce, nonce_cookie = await self.generate_nonce(proxy)
-                if not nonce or not nonce_cookie:
-                    self.log(
-                        f"{Fore.CYAN + Style.BRIGHT}Status    :{Style.RESET_ALL}"
-                        f"{Fore.RED + Style.BRIGHT} {message} {Style.RESET_ALL}"
-                    )
-                    proxy = self.rotate_proxy_for_account(address) if use_proxy else None
-                    await asyncio.sleep(5)
-                    continue
-
-                return nonce, nonce_cookie
-
-        nonce, nonce_cookie = await self.generate_nonce(proxy)
-        if not nonce or not nonce_cookie:
-            self.log(
-                f"{Fore.CYAN + Style.BRIGHT}Status    :{Style.RESET_ALL}"
-                f"{Fore.RED + Style.BRIGHT} {message} {Style.RESET_ALL}"
-            )
-            return None, None
-
-        return nonce, nonce_cookie
-        
-    async def process_user_verify(self, account: str, address: str, use_proxy: bool, rotate_proxy: bool):
-        nonce, nonce_cookie = await self.process_generate_nonce(address, use_proxy, rotate_proxy)
-        if nonce and nonce_cookie:
+        while True:
             proxy = self.get_next_proxy_for_account(address) if use_proxy else None
+            self.log(
+                f"{Fore.CYAN + Style.BRIGHT}Proxy  :{Style.RESET_ALL}"
+                f"{Fore.WHITE + Style.BRIGHT} {proxy} {Style.RESET_ALL}"
+            )
 
-            token_cookie = await self.user_verify(account, address, nonce, nonce_cookie, proxy)
-            if not token_cookie:
-                self.log(
-                    f"{Fore.CYAN + Style.BRIGHT}Status    :{Style.RESET_ALL}"
-                    f"{Fore.RED + Style.BRIGHT} Login Failed {Style.RESET_ALL}"
-                )
-                return None
+            nonce_str, nonce_cookie = await self.generate_nonce(proxy)
+            if nonce_str and nonce_cookie:
+                self.nonce_str[address] = nonce_str
+                self.nonce_cookies[address] = nonce_cookie
+                return True
 
-            return token_cookie
+            if rotate_proxy:
+                proxy = self.rotate_proxy_for_account(address)
+                await asyncio.sleep(5)
+                continue
+
+            return False
+
+    async def process_user_verify(self, account: str, address: str, use_proxy: bool, rotate_proxy: bool):
+        nonce = await self.process_generate_nonce(address, use_proxy, rotate_proxy)
+        if nonce:
+            while True:
+                proxy = self.get_next_proxy_for_account(address) if use_proxy else None
+
+                token_cookie = await self.user_verify(account, address, proxy)
+                if token_cookie:
+                    self.token_cookies[address] = token_cookie
+
+                    self.log(
+                        f"{Fore.CYAN + Style.BRIGHT}Status :{Style.RESET_ALL}"
+                        f"{Fore.GREEN + Style.BRIGHT} Login Success {Style.RESET_ALL}"
+                    )
+                    return True
+
+                return False
             
     async def process_accounts(self, account: str, address: str, use_proxy: bool, rotate_proxy: bool):
-        token_cookie = await self.process_user_verify(account, address, use_proxy, rotate_proxy)
-        if token_cookie:
+        logined = await self.process_user_verify(account, address, use_proxy, rotate_proxy)
+        if logined:
             proxy = self.get_next_proxy_for_account(address) if use_proxy else None
-            self.log(
-                f"{Fore.CYAN + Style.BRIGHT}Status    :{Style.RESET_ALL}"
-                f"{Fore.GREEN + Style.BRIGHT} Login Success {Style.RESET_ALL}"
-            )
 
-            balance = "N/A"
-
-            points = await self.user_exp(token_cookie, proxy)
+            points = await self.user_exp(address, proxy)
             if points:
-                balance = points.strip('"')
+                balance = points.strip('"') or "N/A"
 
-            self.log(
-                f"{Fore.CYAN + Style.BRIGHT}Balance   :{Style.RESET_ALL}"
-                f"{Fore.WHITE + Style.BRIGHT} {balance} GXP {Style.RESET_ALL}"
-            )
-
-
-            streak = await self.streak_info(token_cookie, proxy)
-            if streak:
-                last_perform = streak.get("lastVisitDate")
-
-                now = int(datetime.now(timezone.utc).timestamp())
-                next_perform = int(datetime.fromisoformat(last_perform.replace("Z", "+00:00")).timestamp()) + 86400
-
-                if now >= next_perform:
-                    perform = await self.perform_streak(token_cookie, proxy)
-                    if perform:
-                        self.log(
-                            f"{Fore.CYAN + Style.BRIGHT}Say GM    :{Style.RESET_ALL}"
-                            f"{Fore.GREEN + Style.BRIGHT} Success {Style.RESET_ALL}"
-                        )
-                    else:
-                        self.log(
-                            f"{Fore.CYAN + Style.BRIGHT}Say GM    :{Style.RESET_ALL}"
-                            f"{Fore.RED + Style.BRIGHT} Failed {Style.RESET_ALL}"
-                        )
-                else:
-                    self.log(
-                        f"{Fore.CYAN + Style.BRIGHT}Say GM    :{Style.RESET_ALL}"
-                        f"{Fore.YELLOW + Style.BRIGHT} Already Performed {Style.RESET_ALL}"
-                    )
-            else:
                 self.log(
-                    f"{Fore.CYAN + Style.BRIGHT}Say GM    :{Style.RESET_ALL}"
-                    f"{Fore.RED + Style.BRIGHT} GET Data Failed {Style.RESET_ALL}"
+                    f"{Fore.CYAN + Style.BRIGHT}Balance:{Style.RESET_ALL}"
+                    f"{Fore.WHITE + Style.BRIGHT} {balance} GXP {Style.RESET_ALL}"
                 )
 
-            self.log(f"{Fore.CYAN + Style.BRIGHT}Task Lists:{Style.RESET_ALL}")
+            streak = await self.streak_info(address, proxy)
+            if not streak:
+                return
             
-            displayed = "Unknown"
-            for category in ["social", "gpunet", "onchain", "dev", "partner", "solana", "twitter", "dapp"]:
-                if category == "social":
-                    displayed = "Social"
-                elif category == "Gpunet":
-                    displayed = "Intro GPU.net"
-                elif category == "onchain":
-                    displayed = "Onchain"
-                elif category == "dev":
-                    displayed = "Dev"
-                elif category == "partner":
-                    displayed = "Partner"
-                elif category == "solana":
-                    displayed = "Solana"
-                elif category == "twitter":
-                    displayed = "Twitter"
-                elif category == "dapp":
-                    displayed = "Dapp"
+            last_perform = streak.get("lastVisitDate")
 
-                tasks = await self.task_lists(token_cookie, category, proxy)
-                if tasks:
-                    self.log(
-                        f"{Fore.MAGENTA + Style.BRIGHT} ● {Style.RESET_ALL}"
-                        f"{Fore.GREEN + Style.BRIGHT}{displayed}{Style.RESET_ALL}"
-                    )
-                    for task in tasks:
-                        if task:
-                            task_id = task["id"]
-                            title = task["name"]
-                            reward = task["experience"]
-                            is_completed = task["completed"]
+            now = int(datetime.now(timezone.utc).timestamp())
+            next_perform = int(datetime.fromisoformat(last_perform.replace("Z", "+00:00")).timestamp()) + 86400
+            next_perform_wib = datetime.fromtimestamp(next_perform).astimezone(wib).strftime('%x %X %Z')
 
-                            if is_completed:
-                                self.log(
-                                    f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                    f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
-                                    f"{Fore.YELLOW + Style.BRIGHT}Already Completed{Style.RESET_ALL}"
-                                )
-                                continue
-                            
-                            if category in ["social", "onchain", "dev", "partner", "solana", "twitter", "dapp"]:
-                                verify = await self.verify_tasks(token_cookie, category, task_id, proxy)
-                                if verify and verify.get("message") == "Task verified":
-                                    self.log(
-                                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
-                                        f"{Fore.GREEN + Style.BRIGHT}Is Completed{Style.RESET_ALL}"
-                                        f"{Fore.MAGENTA + Style.BRIGHT} - {Style.RESET_ALL}"
-                                        f"{Fore.CYAN + Style.BRIGHT}Reward{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {reward} GXP {Style.RESET_ALL}"
-                                    )
-                                else:
-                                    self.log(
-                                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
-                                        f"{Fore.RED + Style.BRIGHT}Not Completed{Style.RESET_ALL}"
-                                    )
-                            elif category == "gpunet":
-                                verify = await self.verify_intro_tasks(token_cookie, task_id, proxy)
-                                if verify and verify.get("message") == "Task verified":
-                                    self.log(
-                                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
-                                        f"{Fore.GREEN + Style.BRIGHT}Is Completed{Style.RESET_ALL}"
-                                        f"{Fore.MAGENTA + Style.BRIGHT} - {Style.RESET_ALL}"
-                                        f"{Fore.CYAN + Style.BRIGHT}Reward{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {reward} GXP {Style.RESET_ALL}"
-                                    )
-                                else:
-                                    self.log(
-                                        f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                        f"{Fore.WHITE + Style.BRIGHT} {title} {Style.RESET_ALL}"
-                                        f"{Fore.RED + Style.BRIGHT}Not Completed{Style.RESET_ALL}"
-                                    )
-
-                    if category == "social":
-                        claim_multiplier = await self.claim_multiplier(token_cookie, category, proxy)
-                        if claim_multiplier and claim_multiplier.get("message") == "Multiplexer bonus awarded":
-                            self.log(
-                                f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
-                                f"{Fore.GREEN + Style.BRIGHT}Is Claimed{Style.RESET_ALL}"
-                            )
-                        elif claim_multiplier and claim_multiplier.get("message") == "Not all tasks completed":
-                            self.log(
-                                f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
-                                f"{Fore.YELLOW + Style.BRIGHT}Not Eligible{Style.RESET_ALL}"
-                            )
-                        elif claim_multiplier and claim_multiplier.get("message") == "Multiplexer bonus already awarded for this quest type":
-                            self.log(
-                                f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
-                                f"{Fore.YELLOW + Style.BRIGHT}Already Claimed{Style.RESET_ALL}"
-                            )
-                        else:
-                            self.log(
-                                f"{Fore.CYAN + Style.BRIGHT}    >{Style.RESET_ALL}"
-                                f"{Fore.WHITE + Style.BRIGHT} {displayed} Multiplier {Style.RESET_ALL}"
-                                f"{Fore.RED + Style.BRIGHT}Not Claimed{Style.RESET_ALL}"
-                            )
-
-                else:
-                    self.log(
-                        f"{Fore.MAGENTA + Style.BRIGHT} ● {Style.RESET_ALL}"
-                        f"{Fore.RED + Style.BRIGHT}{displayed}{Style.RESET_ALL}"
-                    )
+            if now < next_perform:
+                self.log(
+                    f"{Fore.CYAN + Style.BRIGHT}Say GM :{Style.RESET_ALL}"
+                    f"{Fore.YELLOW + Style.BRIGHT} Already Performed {Style.RESET_ALL}"
+                    f"{Fore.MAGENTA + Style.BRIGHT}-{Style.RESET_ALL}"
+                    f"{Fore.CYAN + Style.BRIGHT} Next at {Style.RESET_ALL}"
+                    f"{Fore.WHITE + Style.BRIGHT}{next_perform_wib}{Style.RESET_ALL}"
+                )
+                return
+            
+            perform = await self.perform_streak(address, proxy)
+            if perform:
+                self.log(
+                    f"{Fore.CYAN + Style.BRIGHT}Say GM :{Style.RESET_ALL}"
+                    f"{Fore.GREEN + Style.BRIGHT} Success {Style.RESET_ALL}"
+                )
 
     async def main(self):
         try:
@@ -633,8 +460,14 @@ class GPU:
                             f"{Fore.CYAN + Style.BRIGHT}]{separator}{Style.RESET_ALL}"
                         )
 
-                        if address:
-                            await self.process_accounts(account, address, use_proxy, rotate_proxy)
+                        if not address:
+                            self.log(
+                                f"{Fore.CYAN + Style.BRIGHT}Status :{Style.RESET_ALL}"
+                                f"{Fore.RED + Style.BRIGHT} Invalid Private Key or Library Version Not Supported {Style.RESET_ALL}"
+                            )
+                            continue
+
+                        await self.process_accounts(account, address, use_proxy, rotate_proxy)
 
                 self.log(f"{Fore.CYAN + Style.BRIGHT}={Style.RESET_ALL}"*72)
                 
